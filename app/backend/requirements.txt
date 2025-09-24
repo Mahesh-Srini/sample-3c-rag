@@ -178,7 +178,7 @@ microsoft-kiota-abstractions==1.9.3
     #   microsoft-kiota-serialization-multipart
     #   microsoft-kiota-serialization-text
     #   msgraph-core
-microsoft-kiota-authentication-azure==1.9.3
+microsoft-kiota-authentication-azure==1.9.7
     # via msgraph-core
 microsoft-kiota-http==1.9.3
     # via msgraph-core
