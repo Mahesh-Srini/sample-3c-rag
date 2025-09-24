@@ -4,8 +4,14 @@ WORKDIR /app
 
 COPY ./ /app
 
-RUN python -m pip install -r requirements.txt
+RUN python -m pip install --upgrade pip \
+	&& python -m pip install -r requirements.txt
 
-RUN python -m pip install gunicorn
+ENV QUART_APP=main:app
+ENV QUART_ENV=development
+ENV QUART_DEBUG=0
+ENV LOADING_MODE_FOR_AZD_ENV_VARS=override
 
-CMD ["python3", "-m", "gunicorn", "-b", "0.0.0.0:8000", "main:app"]
+EXPOSE 50505
+
+CMD ["quart", "run", "--reload", "-p", "50505"]

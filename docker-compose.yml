@@ -1,0 +1,21 @@
+version: '3.8'
+services:
+  backend:
+    build: ./app/backend
+    ports:
+      - "50505:50505"
+    environment:
+      QUART_APP: main:app
+      QUART_ENV: development
+      QUART_DEBUG: 0
+      LOADING_MODE_FOR_AZD_ENV_VARS: override
+    volumes:
+      - ./app/backend:/app
+  frontend:
+    build: ./app/frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./app/frontend:/app
+    depends_on:
+      - backend

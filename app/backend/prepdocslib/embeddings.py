@@ -49,7 +49,7 @@ class OpenAIEmbeddings(ABC):
     SUPPORTED_DIMENSIONS_MODEL = {
         "text-embedding-ada-002": False,
         "text-embedding-3-small": True,
-        "text-embedding-3-large": True,
+        "text-embedding-3-large": False,
     }
 
     def __init__(self, open_ai_model_name: str, open_ai_dimensions: int, disable_batch: bool = False):
