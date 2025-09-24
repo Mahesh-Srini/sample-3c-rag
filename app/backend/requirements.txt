@@ -335,7 +335,7 @@ propcache==0.2.0
     #   yarl
 psutil==5.9.8
     # via azure-monitor-opentelemetry-exporter
-pycparser==2.22
+pycparser==2.23
     # via cffi
 pydantic==2.8.2
     # via openai
