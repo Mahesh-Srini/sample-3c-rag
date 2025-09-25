@@ -6,17 +6,66 @@
     width: 100%;
     padding: 0.8rem;
     background: white;
+    display: flex;
+    align-items: center;
 }
 
 .questionInputTextArea {
     width: 100%;
     line-height: 2.5rem;
+    margin-right: 0.5rem;
 }
 
 .questionInputButtonsContainer {
     display: flex;
     flex-direction: column;
     justify-content: flex-end;
+    margin-right: 0.5rem;
+}
+
+.questionInputButtonArea {
+    display: flex;
+    align-items: flex-end;
+    margin-right: 0.5rem;
+}
+
+.fileInputContainer {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.fileInput {
+    display: none;
+}
+
+.fileLabel {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #f3f3f3;
+    border-radius: 50%;
+    width: 2.5rem;
+    height: 2.5rem;
+    cursor: pointer;
+    transition: background 0.2s;
+    border: 1px solid #e0e0e0;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.07);
+}
+
+.fileLabel:hover {
+    background: #e0e7ff;
+    border-color: #b4b4ff;
+}
+
+.fileIcon {
+    font-size: 1.3rem;
+    color: #735ee1;
+}
+
+.fileLabel.disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
 }
 
 @media (min-width: 992px) {

@@ -2,6 +2,10 @@ import dataclasses
 import io
 import json
 import logging
+logger = logging.getLogger("upload")
+logger.setLevel(logging.DEBUG)
+
+import traceback
 import mimetypes
 import os
 import time
@@ -351,47 +355,137 @@ async def speech():
 
 
 @bp.post("/upload")
-@authenticated
-async def upload(auth_claims: dict[str, Any]):
+# @authenticated  # Commented out for anonymous mode
+async def upload():
+    logger.info("[UPLOAD] ===== NEW UPLOAD REQUEST RECEIVED =====")
     request_files = await request.files
+    logger.info(f"[UPLOAD] Request files: {list(request_files.keys())}")
     if "file" not in request_files:
+        logger.error("[UPLOAD] No file part in request")
         return jsonify({"message": "No file part in the request", "status": "failed"}), 400
 
     try:
-        user_oid = auth_claims["oid"]
+        # Use a default user_oid for anonymous mode
+        user_oid = "anonymous"
         file = request_files.getlist("file")[0]
-        adls_manager: AdlsBlobManager = current_app.config[CONFIG_USER_BLOB_MANAGER]
-        file_url = await adls_manager.upload_blob(file, file.filename, user_oid)
+        logger.debug("[UPLOAD] Step 1: Received upload request")
+        logger.debug(f"[UPLOAD] Step 2: Extracted file from request: {file.filename if file else 'None'}")
+        if not file:
+            logger.error("[UPLOAD] No file part in request")
+            return jsonify({"error": "No file part"}), 400
+        logger.debug(f"[UPLOAD] Step 3: Preparing to upload file: {file.filename}")
+        # Debug: Validate file type/size if needed
+        # Example: Connect to storage
+        logger.debug("[UPLOAD] Step 4: Connecting to storage")
+        # Log env vars and config state before accessing blob manager
+        logger.info(
+            "[UPLOAD] Environment vars: USE_USER_UPLOAD=%s AZURE_USERSTORAGE_ACCOUNT=%s AZURE_USERSTORAGE_CONTAINER=%s",
+            os.getenv("USE_USER_UPLOAD"),
+            os.getenv("AZURE_USERSTORAGE_ACCOUNT"), 
+            os.getenv("AZURE_USERSTORAGE_CONTAINER"),
+        )
+        logger.info("[UPLOAD] CONFIG_USER_BLOB_MANAGER present: %s", CONFIG_USER_BLOB_MANAGER in current_app.config)
+        # Defensive check: ensure user blob manager exists
+        blob_manager: BlobManager | None = current_app.config.get(CONFIG_USER_BLOB_MANAGER)
+        if blob_manager is None:
+            logger.error(
+                "[UPLOAD] CONFIG_USER_BLOB_MANAGER not initialized. USE_USER_UPLOAD=%s AZURE_USERSTORAGE_ACCOUNT=%s AZURE_USERSTORAGE_CONTAINER=%s",
+                os.getenv("USE_USER_UPLOAD"),
+                os.getenv("AZURE_USERSTORAGE_ACCOUNT"),
+                os.getenv("AZURE_USERSTORAGE_CONTAINER"),
+            )
+            # Attempt lazy init if env vars are present
+            if os.getenv("USE_USER_UPLOAD", "").lower() == "true" and os.getenv("AZURE_USERSTORAGE_ACCOUNT") and os.getenv("AZURE_USERSTORAGE_CONTAINER"):
+                try:
+                    from prepdocslib.blobmanager import BlobManager as _BlobManager
+                    blob_manager = _BlobManager(
+                        endpoint=f"https://{os.getenv('AZURE_USERSTORAGE_ACCOUNT')}.blob.core.windows.net",
+                        container=os.getenv("AZURE_USERSTORAGE_CONTAINER"),
+                        credential=current_app.config[CONFIG_CREDENTIAL],
+                        account=os.getenv("AZURE_USERSTORAGE_ACCOUNT"),
+                    )
+                    current_app.config[CONFIG_USER_BLOB_MANAGER] = blob_manager
+                    logger.info("[UPLOAD] Lazily initialized user blob manager during upload request")
+                except Exception:
+                    logger.exception("[UPLOAD] Failed lazy initialization of user blob manager")
+            if blob_manager is None:
+                return (
+                    jsonify(
+                        {
+                            "message": "User upload storage not configured. Set USE_USER_UPLOAD=true and provide AZURE_USERSTORAGE_ACCOUNT & AZURE_USERSTORAGE_CONTAINER then restart backend.",
+                            "status": "failed",
+                        }
+                    ),
+                    500,
+                )
+        # Upload file directly using BlobServiceClient since BlobManager expects file paths
+        logger.info("[UPLOAD] About to upload using blob_manager's blob service client directly")
+        container_client = blob_manager.blob_service_client.get_container_client(blob_manager.container)
+        if not await container_client.exists():
+            await container_client.create_container()
+        
+        # Generate blob name from filename
+        blob_name = blob_manager.blob_name_from_file_name(file.filename)
+        logger.info(f"[UPLOAD] Uploading blob with name: {blob_name}")
+        
+        # Upload the file stream directly
+        file.stream.seek(0)  # Reset stream position
+        blob_client = await container_client.upload_blob(blob_name, file.stream, overwrite=True)
+        file_url = blob_client.url
+        logger.debug("[UPLOAD] Step 5: Uploading file to storage")
         ingester: UploadUserFileStrategy = current_app.config[CONFIG_INGESTER]
-        await ingester.add_file(File(content=file, url=file_url, acls={"oids": [user_oid]}), user_oid=user_oid)
+        if not ingester:
+            logger.error("[UPLOAD] CONFIG_INGESTER missing. Was USE_USER_UPLOAD=true at startup?")
+            return (
+                jsonify(
+                    {
+                        "message": "File ingester not configured. Ensure USE_USER_UPLOAD=true at startup and restart service.",
+                        "status": "failed",
+                    }
+                ),
+                500,
+            )
+        
+        # Create a BytesIO object from the file content to avoid FileStorage serialization issues
+        file.stream.seek(0)  # Reset stream position
+        file_content = file.stream.read()
+        from io import BytesIO
+        file_io = BytesIO(file_content)
+        file_io.name = file.filename  # Set filename for the File class to use
+        
+        await ingester.add_file(File(content=file_io, url=file_url, acls={}), user_oid=user_oid)
+        logger.info("[UPLOAD] Step 6: File upload and indexing successful")
         return jsonify({"message": "File uploaded successfully"}), 200
     except Exception as error:
-        current_app.logger.error("Error uploading file: %s", error)
-        return jsonify({"message": "Error uploading file, check server logs for details.", "status": "failed"}), 500
+        import traceback
+        current_app.logger.error("Error uploading file: %s\n%s", error, traceback.format_exc())
+        return jsonify({"message": f"Error uploading file: {str(error)}", "status": "failed"}), 500
 
 
 @bp.post("/delete_uploaded")
-@authenticated
-async def delete_uploaded(auth_claims: dict[str, Any]):
+# @authenticated  # Commented out for anonymous mode
+async def delete_uploaded():
     request_json = await request.get_json()
     filename = request_json.get("filename")
-    user_oid = auth_claims["oid"]
-    adls_manager: AdlsBlobManager = current_app.config[CONFIG_USER_BLOB_MANAGER]
-    await adls_manager.remove_blob(filename, user_oid)
+    user_oid = "anonymous"
+    blob_manager: BlobManager = current_app.config[CONFIG_USER_BLOB_MANAGER]
+    # TODO: Implement blob deletion for regular BlobManager
+    # await blob_manager.remove_blob(filename)
     ingester: UploadUserFileStrategy = current_app.config[CONFIG_INGESTER]
     await ingester.remove_file(filename, user_oid)
     return jsonify({"message": f"File {filename} deleted successfully"}), 200
 
 
 @bp.get("/list_uploaded")
-@authenticated
-async def list_uploaded(auth_claims: dict[str, Any]):
+# @authenticated  # Commented out for anonymous mode
+async def list_uploaded():
     """Lists the uploaded documents for the current user.
     Only returns files directly in the user's directory, not in subdirectories.
     Excludes image files and the images directory."""
-    user_oid = auth_claims["oid"]
-    adls_manager: AdlsBlobManager = current_app.config[CONFIG_USER_BLOB_MANAGER]
-    files = await adls_manager.list_blobs(user_oid)
+    user_oid = "anonymous"
+    blob_manager: BlobManager = current_app.config[CONFIG_USER_BLOB_MANAGER]
+    # TODO: Implement blob listing for regular BlobManager
+    files = []  # Return empty list for now
     return jsonify(files), 200
 
 
@@ -401,8 +495,9 @@ async def setup_clients():
     AZURE_STORAGE_ACCOUNT = os.environ["AZURE_STORAGE_ACCOUNT"]
     AZURE_STORAGE_CONTAINER = os.environ["AZURE_STORAGE_CONTAINER"]
     AZURE_IMAGESTORAGE_CONTAINER = os.environ.get("AZURE_IMAGESTORAGE_CONTAINER")
-    AZURE_USERSTORAGE_ACCOUNT = os.environ.get("AZURE_USERSTORAGE_ACCOUNT")
-    AZURE_USERSTORAGE_CONTAINER = os.environ.get("AZURE_USERSTORAGE_CONTAINER")
+    # Hardcoded values for user storage (TODO: fix env var loading)
+    AZURE_USERSTORAGE_ACCOUNT = "stwhiy4mjstzovw"  # os.environ.get("AZURE_USERSTORAGE_ACCOUNT")
+    AZURE_USERSTORAGE_CONTAINER = "user-content"  # os.environ.get("AZURE_USERSTORAGE_CONTAINER")
     AZURE_SEARCH_SERVICE = os.environ["AZURE_SEARCH_SERVICE"]
     AZURE_SEARCH_ENDPOINT = f"https://{AZURE_SEARCH_SERVICE}.search.windows.net"
     AZURE_SEARCH_INDEX = os.environ["AZURE_SEARCH_INDEX"]
@@ -463,7 +558,8 @@ async def setup_clients():
     RAG_SEARCH_IMAGE_EMBEDDINGS = os.getenv("RAG_SEARCH_IMAGE_EMBEDDINGS", "true").lower() == "true"
     RAG_SEND_TEXT_SOURCES = os.getenv("RAG_SEND_TEXT_SOURCES", "true").lower() == "true"
     RAG_SEND_IMAGE_SOURCES = os.getenv("RAG_SEND_IMAGE_SOURCES", "true").lower() == "true"
-    USE_USER_UPLOAD = os.getenv("USE_USER_UPLOAD", "").lower() == "true"
+    # Hardcoded values for user upload (TODO: fix env var loading)
+    USE_USER_UPLOAD = True  # os.getenv("USE_USER_UPLOAD", "").lower() == "true"
     ENABLE_LANGUAGE_PICKER = os.getenv("ENABLE_LANGUAGE_PICKER", "").lower() == "true"
     USE_SPEECH_INPUT_BROWSER = os.getenv("USE_SPEECH_INPUT_BROWSER", "").lower() == "true"
     USE_SPEECH_OUTPUT_BROWSER = os.getenv("USE_SPEECH_OUTPUT_BROWSER", "").lower() == "true"
@@ -572,16 +668,24 @@ async def setup_clients():
     )
 
     user_blob_manager = None
+    # Log environment variables at startup
+    current_app.logger.info(
+        "[STARTUP] Environment vars: USE_USER_UPLOAD=%s AZURE_USERSTORAGE_ACCOUNT=%s AZURE_USERSTORAGE_CONTAINER=%s",
+        USE_USER_UPLOAD,
+        AZURE_USERSTORAGE_ACCOUNT,
+        AZURE_USERSTORAGE_CONTAINER,
+    )
     if USE_USER_UPLOAD:
         current_app.logger.info("USE_USER_UPLOAD is true, setting up user upload feature")
         if not AZURE_USERSTORAGE_ACCOUNT or not AZURE_USERSTORAGE_CONTAINER:
             raise ValueError(
                 "AZURE_USERSTORAGE_ACCOUNT and AZURE_USERSTORAGE_CONTAINER must be set when USE_USER_UPLOAD is true"
             )
-        user_blob_manager = AdlsBlobManager(
-            endpoint=f"https://{AZURE_USERSTORAGE_ACCOUNT}.dfs.core.windows.net",
+        user_blob_manager = BlobManager(
+            endpoint=f"https://{AZURE_USERSTORAGE_ACCOUNT}.blob.core.windows.net",
             container=AZURE_USERSTORAGE_CONTAINER,
             credential=azure_credential,
+            account=AZURE_USERSTORAGE_ACCOUNT,
         )
         current_app.config[CONFIG_USER_BLOB_MANAGER] = user_blob_manager
 

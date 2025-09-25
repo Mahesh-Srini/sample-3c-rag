@@ -84,7 +84,7 @@ export function getCitationFilePath(citation: string): string {
     return `${BACKEND_URI}/content/${cleanedCitation}`;
 }
 
-export async function uploadFileApi(request: FormData, idToken: string): Promise<SimpleAPIResponse> {
+export async function uploadFileApi(request: FormData, idToken?: string): Promise<SimpleAPIResponse> {
     const response = await fetch("/upload", {
         method: "POST",
         headers: await getHeaders(idToken),
@@ -99,7 +99,7 @@ export async function uploadFileApi(request: FormData, idToken: string): Promise
     return dataResponse;
 }
 
-export async function deleteUploadedFileApi(filename: string, idToken: string): Promise<SimpleAPIResponse> {
+export async function deleteUploadedFileApi(filename: string, idToken?: string): Promise<SimpleAPIResponse> {
     const headers = await getHeaders(idToken);
     const response = await fetch("/delete_uploaded", {
         method: "POST",
@@ -115,7 +115,7 @@ export async function deleteUploadedFileApi(filename: string, idToken: string): 
     return dataResponse;
 }
 
-export async function listUploadedFilesApi(idToken: string): Promise<string[]> {
+export async function listUploadedFilesApi(idToken?: string): Promise<string[]> {
     const response = await fetch(`/list_uploaded`, {
         method: "GET",
         headers: await getHeaders(idToken)
